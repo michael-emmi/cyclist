@@ -49,6 +49,7 @@ class ConflictTracker
     @objs = {}
     @accs = {}
     @future = {}
+    @conflicts = {}
     @preds = {}
     @succs = {}
   end
@@ -61,20 +62,27 @@ class ConflictTracker
     @accs[agent].merge(@future[agent]){|_,ms1,ms2| ms1.merge(ms2)}
   end
 
-  def to_s
+  def to_s()
     return "no live agents" unless agents.count > 0
     agents.map do |a|
-      "agent #{a}: accesses {#{@accs[a].map{|o,ms| "#{o}(#{ms.map(&:to_s) * ","})"} * ", "}} " +
-      "future {#{@future[a].map{|o,k| "#{o}(#{ms.map(&:to_s) * ","})"} * ", "}} " +
-      "before {#{@succs[a].map(&:to_s) * ", "}}"
+      accs = @accs[a].map{|o,ms| "#{o}(#{ms.map(&:to_s) * ","})" if @conflicts[a].include?(o)}.compact
+      accs << "..." unless @accs[a].empty?
+      future = @future[a].map{|o,k| "#{o}(#{ms.map(&:to_s) * ","})" if @conflicts[a].include?(o)}.compact
+      future << "..." unless @future[a].empty?
+      "AGENT #{a}\n" +
+      "* before {#{@succs[a].map(&:to_s) * ", "}}\n" +
+      "* accesses {#{accs * ", "}}\n" +
+      "* future {#{future * ", "}}"
     end * "\n"
   end
 
   def start(agent)
     @accs[agent] = {}
     @future[agent] = {}
+    @conflicts[agent] = Set.new
     @preds[agent] = Set.new
     @succs[agent] = Set.new
+    nil
   end
 
   def complete(agent)
@@ -87,6 +95,7 @@ class ConflictTracker
       @succs[a].merge(@succs[agent])
       @succs[a].delete(agent)
       @future[a].merge(accesses(agent)){|_,ms1,ms2| ms1.merge(ms2)}
+      @conflicts[a].merge(@conflicts[agent])
     end
     @succs[agent].each do |a|
       @preds[a].merge(@preds[agent])
@@ -94,43 +103,36 @@ class ConflictTracker
     end
     @accs.delete(agent)
     @future.delete(agent)
+    @conflicts.delete(agent)
     @preds.delete(agent)
     @succs.delete(agent)
+    nil
   end
 
   def access(agent, object, method)
+    conflicts = Set.new
     start(agent) unless live?(agent)
     @objs[object] ||= Set.new
     @objs[object].each do |a|
       if @future[a][object] && @future[a][object].any?{|m| @conflict_fn.call(m,method)} ||
         agent != a && @accs[a][object] && @accs[a][object].any?{|m| @conflict_fn.call(m,method)}
       then
+        conflicts << a
         @preds[agent] << a
         @succs[a] << agent        
+        @conflicts[agent] << object
+        @conflicts[a] << object
       end
     end
     @objs[object] << agent
     @accs[agent][object] ||= Set.new
     @accs[agent][object] << method
-  end
-end
-
-def step(tracker, action, agent, *args)
-  if $verbose
-    puts ("-" * 80)
-    puts "ACTION: #{action} #{agent} #{args * " "}"
-  end
-
-  tracker.send(action, agent, *args)
-
-  if $verbose
-    puts ("-" * 80)
-    puts "TRACKER\n#{tracker}"
-    puts ("-" * 80)
+    conflicts unless conflicts.empty?
   end
 end
 
 begin
+  $version = 0.4
   $verbose = false
 
   OptionParser.new do |opts|
@@ -147,7 +149,7 @@ begin
     end
   end.parse!
   
-  puts "Serious Cyclist version 0.3"
+  puts "Serious Cyclist version #{$version}"
 
   execution_log = ARGV.first
   unless execution_log && File.exists?(execution_log)
@@ -170,7 +172,15 @@ begin
       action, agent, *args = interpreter.readline(line)
       next if action.nil?
       cycle ||= tracker.live?(agent) && tracker.cycle?(agent)
-      step(tracker, action, agent, *args)
+
+      if tracker.send(action, agent, *args) && $verbose
+        puts ("-" * 80)
+        puts "ACTION: #{action} #{agent} #{args * " "}"
+        puts ("-" * 80)
+        puts "#{tracker}"
+        puts ("-" * 80)
+      end
+
       agents << agent
       objects << args.first if args.count > 0
       steps += 1
@@ -179,7 +189,7 @@ begin
 
   tracker.agents.each do |agent|
     cycle ||= tracker.live?(agent) && tracker.cycle?(agent)
-    step(tracker, :complete, agent)
+    tracker.send(:complete, agent)
     steps += 1
   end
 
