@@ -28,7 +28,7 @@ module EventActionInterpreter
       \A
       Event:\s+(?'event'\S+)
       \s+
-      (?'action'\S+)\s+(?'object'\S+)\s+(?'type'\S+)\s+(?'field'\S+)
+      (?'action'\S+)\s+(?'object'\S+)\s+(?'type'\S+)\s+(?'field'\S+)\s+(?'method'\S+)
       \s+
       Thread:\s+(?'thread'.*)
       \Z
