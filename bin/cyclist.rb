@@ -58,6 +58,41 @@ class ConflictTracker
   def live?(agent)      !@accs[agent].nil? end
   def cycle?(agent)     @preds[agent].include?(agent) end
 
+  def find_cycle(agent)
+    work_list = []
+    covered = Set.new
+
+    work_list << [{agent: agent, accesses: []}]
+    covered << agent
+
+    until work_list.empty? do
+      path = work_list.shift
+      last = path.last[:agent]
+      @succs[last].each do |a|
+        accesses = (@conflicts[last] & @conflicts[a]).select do |o|
+          @accs[last][o].any? do |m1|
+            @accs[a][o].any? do |m2|
+              @conflict_fn.call(m1, m2)
+            end
+          end
+        end
+
+        fail "Expected conflict with successor!" if accesses.empty?
+
+        if path.first[:agent] == a
+          return path + [{agent: a, accesses: accesses}]
+        end
+
+        unless covered.include?(a)
+          covered << a
+          work_list << (path + [{agent: a, accesses: accesses}])
+        end
+      end
+    end
+
+    nil
+  end
+
   def accesses(agent)
     @accs[agent].merge(@future[agent]){|_,ms1,ms2| ms1.merge(ms2)}
   end
@@ -119,7 +154,7 @@ class ConflictTracker
       then
         conflicts << a
         @preds[agent] << a
-        @succs[a] << agent        
+        @succs[a] << agent
         @conflicts[agent] << object
         @conflicts[a] << object
       end
@@ -147,8 +182,13 @@ begin
     opts.on("-v", "--verbose", "Display informative messages too.") do |v|
       $verbose = v
     end
+
+    opts.on("-e", "--eager", "Detect cycles eagerly?") do |e|
+      $eager = e
+    end
+
   end.parse!
-  
+
   puts "Serious Cyclist version #{$version}"
 
   execution_log = ARGV.first
@@ -181,6 +221,13 @@ begin
         puts ("-" * 80)
       end
 
+      if $eager && path = tracker.find_cycle(agent)
+        cycle = path.map do |p|
+          "(#{p[:accesses] * ", "})\n  (AGENT #{p[:agent]})"
+        end * "\n  "
+        break
+      end
+
       agents << agent
       objects << args.first if args.count > 0
       steps += 1
@@ -191,7 +238,7 @@ begin
     cycle ||= tracker.live?(agent) && tracker.cycle?(agent)
     tracker.send(:complete, agent)
     steps += 1
-  end
+  end unless $eager
 
   puts "-" * 60
   puts "trace:  #{execution_log}"
