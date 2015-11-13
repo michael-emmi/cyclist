@@ -16,9 +16,9 @@ module SimpleInterpreter
       line.match(expr) do |m|
         return act, *m.to_a.drop(1).map(&:to_i)
       end
-      puts "INVALID LINE: #{line}"
-      return nil
     end
+    puts "INVALID LINE: #{line}"
+    return nil
   end
 end
 
@@ -33,9 +33,9 @@ module EventActionInterpreter
       line.match(expr) do |m|
         return act, *m.to_a.drop(1).map(&:to_i)
       end
-      puts "INVALID LINE: #{line}"
-      return nil
     end
+    puts "INVALID LINE: #{line}"
+    return nil
   end
 end
 
@@ -107,7 +107,7 @@ end
 def step(tracker, action, agent, *args)
   if $verbose
     puts ("-" * 80)
-    puts "ACTION: #{action} #{args * " "}"
+    puts "ACTION: #{action} #{agent} #{args * " "}"
   end
 
   tracker.send(action, agent, *args)
