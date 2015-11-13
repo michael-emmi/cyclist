@@ -1,53 +1,46 @@
 #!/usr/bin/env ruby
 
 require 'optparse'
-require 'ostruct'
 require 'Set'
 
-$verbose = false
-
+# Just for illustration purposes.
 module SimpleInterpreter
-  # The simplest possible log interpreter.
-  # Interprets the following lines as expected.
-  #
-  # start 1
-  # access 1 10
-  #
-  # start 2
-  # access 2 10
-  # access 2 20
-  #
-  # start 3
-  # access 3 20
-  #
-  # complete 2
-  #
-  # access 1 10
-  #
-  # complete 1
-  # complete 3
+  E = {
+    start: /\Astart (\d+)\Z/,
+    complete: /\Acomplete (\d+)\Z/,
+    access: /\Aaccess (\d+) (\d+)\Z/,
+  }
 
   def self.readline(line)
-    line = (line.split('#').first || "").strip
-    return nil if line.empty?
+    E.each do |act,expr|
+      line.match(expr) do |m|
+        return act, *m.to_a.drop(1).map(&:to_i)
+      end
+      puts "INVALID LINE: #{line}"
+      return nil
+    end
+  end
+end
 
-    line.match(/\Astart (?'id'\d+)\Z/) do |m|
-      return :start, m[:id].to_i
+module EventActionInterpreter
+  E = {
+    # Start and complete actions are implicit.
+    access: /\AEvent:\s+(\d+|null)\s+[A-Z]{3}\s+(\d+)\s+.*\Z/,
+  }
+  
+  def self.readline(line)
+    E.each do |act,expr|
+      line.match(expr) do |m|
+        return act, *m.to_a.drop(1).map(&:to_i)
+      end
+      puts "INVALID LINE: #{line}"
+      return nil
     end
-    line.match(/\Acomplete (?'id'\d+)\Z/) do |m|
-      return :complete, m[:id].to_i
-    end
-    line.match(/\Aaccess (?'id'\d+) (?'obj'\d+)\Z/) do |m|
-      return :access, m[:id].to_i, m[:obj].to_i
-    end
-    puts "INVALID LINE: #{line}"
-    return nil
   end
 end
 
 class ConflictTracker
-  def initialize(interpreter)
-    @interpreter = interpreter
+  def initialize
     @objs = {}
     @accs = {}
     @future = {}
@@ -55,21 +48,15 @@ class ConflictTracker
     @succs = {}
   end
 
-  def live?(agent)
-    !@accs[agent].nil?
-  end
-
-  def accesses(agent)
-    @accs[agent] + @future[agent]
-  end
-
-  def cycle?(agent)
-    @preds[agent].include?(agent)
-  end
+  def agents;           @accs.keys end
+  def live?(agent)      !@accs[agent].nil? end
+  def accesses(agent)   @accs[agent] + @future[agent] end
+  def cycle?(agent)     @preds[agent].include?(agent) end
 
   def to_s
-    @accs.map do |a,os|
-      "agent #{a}: accesses {#{os.map(&:to_s) * ", "}} " +
+    return "no live agents" unless agents.count > 0
+    agents.map do |a|
+      "agent #{a}: accesses {#{@accs[a].map(&:to_s) * ", "}} " +
       "future {#{@future[a].map(&:to_s) * ", "}} " +
       "before {#{@succs[a].map(&:to_s) * ", "}}"
     end * "\n"
@@ -84,8 +71,6 @@ class ConflictTracker
 
   def complete(agent)
     return unless live?(agent)
-
-    puts "FOUND CYCLE IN AGENT #{agent}" if cycle?(agent)
 
     accesses(agent).each do |o|
       @objs[o].merge(@preds[agent])
@@ -117,29 +102,26 @@ class ConflictTracker
     @objs[object] << agent
     @accs[agent] << object
   end
+end
 
-  def read(file)
-    File.open(file) do |f|
-      f.each do |line|
-        step, *args = @interpreter.readline(line)
-        next if step.nil?
-        if $verbose
-          puts ("-" * 80)
-          puts "ACTION: #{step} #{args * " "}"
-        end
-        send(step, *args)
-        if $verbose
-          puts ("-" * 80)
-          puts "STATE\n#{self}"
-          puts ("-" * 80)
-        end
-      end
-    end
+def step(tracker, action, agent, *args)
+  if $verbose
+    puts ("-" * 80)
+    puts "ACTION: #{action} #{args * " "}"
   end
 
+  tracker.send(action, agent, *args)
+
+  if $verbose
+    puts ("-" * 80)
+    puts "TRACKER\n#{tracker}"
+    puts ("-" * 80)
+  end
 end
 
 begin
+  $verbose = false
+
   OptionParser.new do |opts|
     opts.banner = "Usage: #{File.basename $0} [options] FILE"
     opts.separator ""
@@ -152,7 +134,6 @@ begin
     opts.on("-v", "--verbose", "Display informative messages too.") do |v|
       $verbose = v
     end
-
   end.parse!
   
   execution_log = ARGV.first
@@ -161,5 +142,38 @@ begin
     exit
   end
 
-  ConflictTracker.new(SimpleInterpreter).read(execution_log)
+  tracker = ConflictTracker.new
+  interpreter = EventActionInterpreter
+  agents = Set.new
+  objects = Set.new
+  steps = 0
+  cycle = false
+  start_time = Time.now
+
+  File.open(execution_log) do |f|
+    f.each do |line|
+      line = (line.split('#').first || "").strip
+      next if line.empty?
+      action, agent, *args = interpreter.readline(line)
+      next if action.nil?
+      cycle ||= tracker.live?(agent) && tracker.cycle?(agent)
+      step(tracker, action, agent, *args)
+      agents << agent
+      objects << args.first if args.count > 0
+      steps += 1
+    end
+  end
+
+  tracker.agents.each do |agent|
+    cycle ||= tracker.live?(agent) && tracker.cycle?(agent)
+    step(tracker, :complete, agent)
+    steps += 1
+  end
+
+  puts "agents: #{agents.count}"
+  puts "objets: #{objects.count}"
+  puts "steps:  #{steps}"
+  puts "cycle:  #{cycle}"
+  puts "time:   #{(Time.now - start_time).round(3)}s"
+
 end
